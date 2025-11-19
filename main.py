@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from google import genai
+import google.generativeai as genai
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import requests
@@ -22,7 +22,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = genai.Client()
+# Configure the Gemini API key
+gemini_api_key = os.environ.get("GEMINI_API_KEY")
+if not gemini_api_key:
+    raise ValueError("GEMINI_API_KEY environment variable not set")
+genai.configure(api_key=gemini_api_key)
+
+# Initialize the GenerativeModel
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 class ChatRequest(BaseModel):
     sessionId: str
@@ -34,27 +41,22 @@ def read_root():
 
 def stream_generator(response):
     for chunk in response:
-        if hasattr(chunk, 'candidates') and chunk.candidates:
-            for c in chunk.candidates:
-                if c.content.parts:
-                    for part in c.content.parts:
-                        yield part.text
-        else:
-            yield str(chunk) + "\n"
+        yield chunk.text
 
 @app.post("/gemini-webhook")
 def gemini_webhook(request: ChatRequest):
     user_message = request.message
 
     try:
+        # The new API uses a 'messages' list. The 'system' role can be the first message.
         messages = [
-            {"role": "system", "content": "You are a friendly recovery assistant. Always reply politely and supportively."},
-            {"role": "user", "content": user_message}
+            {'role': 'system', 'content': "You are a friendly recovery assistant. Always reply politely and supportively."},
+            {'role': 'user', 'content': user_message}
         ]
 
-        response = client.generate_content_stream(
-            model="gemini-2.0-flash",  # free tier model
-            messages=messages
+        response = model.generate_content(
+            messages=messages,
+            stream=True
         )
 
         return StreamingResponse(stream_generator(response), media_type="text/plain")
