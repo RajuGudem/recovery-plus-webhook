@@ -36,7 +36,7 @@ class ChatRequest(BaseModel):
 # Initialize Gemini API
 # The API key will be provided via an environment variable in Render
 model = genai.GenerativeModel(
-    "models/gemini-1.5-flash",
+    'gemini-pro',
     system_instruction=(
         "You are RecoveryPlus Doctor Assistant, a professional and knowledgeable virtual doctor who supports "
         "post-surgery and post-operation patients. You provide medically accurate, clear, and structured guidance "
