@@ -26,7 +26,7 @@ app.add_middleware(
 gemini_api_key = os.environ.get("GEMINI_API_KEY")
 if not gemini_api_key:
     raise ValueError("GEMINI_API_KEY environment variable not set")
-genai.configure(api_key=gemini_api_key)
+genai.configure(api_key=gemini_api_key, client_options={"api_endpoint": "generativelanguage.googleapis.com"})
 
 # Initialize the GenerativeModel
 model = genai.GenerativeModel('gemini-1.0-pro')
