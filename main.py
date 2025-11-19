@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from google import genai
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
+import requests
 
 # Set the environment variable for Google Cloud credentials
 # This is crucial for the Dialogflow client to find the credentials file.
@@ -67,21 +68,21 @@ def gemini_webhook(request: ChatRequest):
     try:
         contents = [
             {
-                "role": "system",
-                "parts": [
-                    {"text": "Hello! I'm here to support you through your recovery. How are you feeling today?"}
-                ]
-            },
-            {
                 "role": "user",
                 "parts": [
-                    {"text": user_message}
+                    {
+                        "text": (
+                            "System instruction: You are a friendly recovery assistant. "
+                            "Always reply politely and supportively.\n\n"
+                            f"User message: {user_message}"
+                        )
+                    }
                 ]
-            },
+            }
         ]
         
         response = client.models.generate_content_stream(
-            model="models/gemini-flash-latest",
+            model="models/gemini-2.0-flash",
             contents=contents
         )
         
@@ -98,59 +99,29 @@ async def process_prescription(image: UploadFile = File(...)):
     try:
         image_bytes = await image.read()
 
-        # Prepare the prompt for the vision model
-        prompt = """
-        Analyze the attached prescription image and extract the following information in JSON format:
-        - A list of medications with their name, dosage, and timings.
-        - A list of exercises with their name, duration, and frequency.
-        
-        Example JSON output:
-        {
-          "medications": [
-            {
-              "name": "Medication Name",
-              "dosage": "Dosage",
-              "timings": ["Morning", "Afternoon", "Night"]
-            }
-          ],
-          "exercises": [
-            {
-              "name": "Exercise Name",
-              "duration": "Duration",
-              "frequency": "Frequency"
-            }
-          ]
+        OCR_API_KEY = os.environ.get("OCR_SPACE_API_KEY")
+
+        payload = {
+            "apikey": OCR_API_KEY,
+            "language": "eng",
+            "isOverlayRequired": False
         }
-        """
-
-        contents = [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": image.content_type,
-                            "data": image_bytes
-                        }
-                    }
-                ]
-            }
-        ]
-
-        # Generate content with the vision model
-        response = client.models.generate_content(
-            model="models/gemini-2.0-flash-exp-image-generation",
-            contents=contents
+        files = {
+            "file": (image.filename, image_bytes, image.content_type)
+        }
+        ocr_response = requests.post(
+            "https://api.ocr.space/parse/image",
+            data=payload,
+            files=files
         )
-        
-        # Extract the JSON from the response
-        # The response might contain markdown, so we need to clean it
-        raw = response.text or ""
-        cleaned = raw.replace("```json", "").replace("```", "").strip()
-        json_response = cleaned
-        
-        return JSONResponse(content=json.loads(json_response))
+        ocr_data = ocr_response.json()
+
+        try:
+            parsed_text = ocr_data["ParsedResults"][0]["ParsedText"]
+        except Exception:
+            parsed_text = ""
+
+        return JSONResponse(content={"text": parsed_text})
 
     except Exception as e:
         print("Error in /process_prescription:", e)
