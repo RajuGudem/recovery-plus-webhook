@@ -1,7 +1,7 @@
 # rebuild-render-cache
 fastapi
 uvicorn
-google-genai
+google-generativeai
 python-dotenv
 python-multipart
 pillow
