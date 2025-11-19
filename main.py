@@ -34,9 +34,11 @@ def read_root():
 
 def stream_generator(response):
     for chunk in response:
-        print("STREAM CHUNK:", chunk)
-        if hasattr(chunk, "delta") and hasattr(chunk.delta, "content") and chunk.delta.content:
-            yield chunk.delta.content
+        if hasattr(chunk, 'candidates') and chunk.candidates:
+            for c in chunk.candidates:
+                if c.content.parts:
+                    for part in c.content.parts:
+                        yield part.text
         else:
             yield str(chunk) + "\n"
 
@@ -45,15 +47,14 @@ def gemini_webhook(request: ChatRequest):
     user_message = request.message
 
     try:
-        prompt_text = (
-            "System instruction: You are a friendly recovery assistant. "
-            "Always reply politely and supportively.\n\n"
-            f"User message: {user_message}"
-        )
+        messages = [
+            {"role": "system", "content": "You are a friendly recovery assistant. Always reply politely and supportively."},
+            {"role": "user", "content": user_message}
+        ]
 
-        response = client.models.generate_content_stream(
+        response = client.generate_content_stream(
             model="gemini-2.0-flash",  # free tier model
-            input=prompt_text,
+            messages=messages
         )
 
         return StreamingResponse(stream_generator(response), media_type="text/plain")
@@ -92,7 +93,6 @@ async def process_prescription(image: UploadFile = File(...)):
 
         medications = []
 
-        # Improved pattern to avoid catching random text
         med_pattern = re.compile(
             r"(?P<name>[A-Za-z0-9\-]{2,})\s*(?P<dosage>\d+(?:mg|ml))?\s*(?P<frequency>(?:once|twice|three times|every \d+ hours|[0-2]?\d:[0-5]\d))?",
             re.IGNORECASE
@@ -104,7 +104,7 @@ async def process_prescription(image: UploadFile = File(...)):
             frequency = match.group("frequency") or ""
 
             if not med_name or len(med_name) < 2:
-                continue  # skip invalid matches
+                continue
 
             times = []
             freq_lower = frequency.lower()
