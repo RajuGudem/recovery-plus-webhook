@@ -45,22 +45,17 @@ def gemini_webhook(request: ChatRequest):
     user_message = request.message
 
     try:
-        messages = [
-            {
-                "author": "user",
-                "content": (
-                    "System instruction: You are a friendly recovery assistant. "
-                    "Always reply politely and supportively.\n\n"
-                    f"User message: {user_message}"
-                )
-            }
-        ]
-        
-        response = client.models.generate_content_stream(
-            model="gemini-2.0-turbo",
-            messages=messages,
+        prompt_text = (
+            "System instruction: You are a friendly recovery assistant. "
+            "Always reply politely and supportively.\n\n"
+            f"User message: {user_message}"
         )
-        
+
+        response = client.models.generate_content_stream(
+            model="gemini-2.0-flash",  # free tier model
+            prompt=prompt_text,
+        )
+
         return StreamingResponse(stream_generator(response), media_type="text/plain")
     except Exception as e:
         print(f"Error generating content: {e}")
@@ -97,8 +92,9 @@ async def process_prescription(image: UploadFile = File(...)):
 
         medications = []
 
+        # Improved pattern to avoid catching random text
         med_pattern = re.compile(
-            r"(?P<name>[A-Za-z0-9\-]+)\s*(?P<dosage>\d+mg|\d+ml)?\s*(?P<frequency>\d+\s*times\s*a\s*day|\w+:\w+)?",
+            r"(?P<name>[A-Za-z0-9\-]{2,})\s*(?P<dosage>\d+(?:mg|ml))?\s*(?P<frequency>(?:once|twice|three times|every \d+ hours|[0-2]?\d:[0-5]\d))?",
             re.IGNORECASE
         )
 
@@ -107,12 +103,16 @@ async def process_prescription(image: UploadFile = File(...)):
             dosage = match.group("dosage") or ""
             frequency = match.group("frequency") or ""
 
+            if not med_name or len(med_name) < 2:
+                continue  # skip invalid matches
+
             times = []
-            if "once a day" in frequency.lower():
+            freq_lower = frequency.lower()
+            if "once" in freq_lower:
                 times = ["08:00"]
-            elif "twice a day" in frequency.lower():
+            elif "twice" in freq_lower:
                 times = ["08:00", "20:00"]
-            elif "three times a day" in frequency.lower():
+            elif "three" in freq_lower:
                 times = ["08:00", "14:00", "20:00"]
             elif re.match(r"\d{1,2}:\d{2}", frequency):
                 times = [frequency]
