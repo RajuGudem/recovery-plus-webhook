@@ -42,21 +42,9 @@ def read_root():
 def stream_generator(response):
     for chunk in response:
         print("STREAM CHUNK:", chunk)
-        # Try direct text
-        if hasattr(chunk, "text") and chunk.text:
-            yield chunk.text
-        # Try candidates → content → text (common Gemini v1beta fallback)
-        elif hasattr(chunk, "candidates"):
-            try:
-                candidate = chunk.candidates[0]
-                part = candidate.content.parts[0]
-                text_val = getattr(part, "text", None)
-                if text_val:
-                    yield text_val
-                else:
-                    yield str(chunk) + "\n"
-            except Exception:
-                yield str(chunk) + "\n"
+        # For the free-tier model, the response chunks have 'delta' attribute with 'content'
+        if hasattr(chunk, "delta") and hasattr(chunk.delta, "content") and chunk.delta.content:
+            yield chunk.delta.content
         # Fallback: yield whole object for inspection
         else:
             yield str(chunk) + "\n"
@@ -69,21 +57,18 @@ def gemini_webhook(request: ChatRequest):
         contents = [
             {
                 "role": "user",
-                "parts": [
-                    {
-                        "text": (
-                            "System instruction: You are a friendly recovery assistant. "
-                            "Always reply politely and supportively.\n\n"
-                            f"User message: {user_message}"
-                        )
-                    }
-                ]
+                "content": (
+                    "System instruction: You are a friendly recovery assistant. "
+                    "Always reply politely and supportively.\n\n"
+                    f"User message: {user_message}"
+                )
             }
         ]
         
-        response = client.models.generate_content_stream(
-            model="models/gemini-2.0-flash",
-            contents=contents
+        response = client.chat.completions.create(
+            model="models/gemini-2.0-turbo",
+            messages=contents,
+            stream=True
         )
         
         return StreamingResponse(stream_generator(response), media_type="text/plain")
