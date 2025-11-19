@@ -5,8 +5,6 @@ from pydantic import BaseModel
 from google import genai
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
-from PIL import Image
-import io
 
 # Set the environment variable for Google Cloud credentials
 # This is crucial for the Dialogflow client to find the credentials file.
@@ -66,7 +64,7 @@ def gemini_webhook(request: ChatRequest):
         ]
         
         response = client.models.generate_content_stream(
-            model="gemini-pro",
+            model="gemini-1.5-pro",
             contents=contents
         )
         
@@ -81,9 +79,7 @@ class PrescriptionRequest(BaseModel):
 @app.post("/process_prescription")
 async def process_prescription(image: UploadFile = File(...)):
     try:
-        # Read the image data
-        image_data = await image.read()
-        img = Image.open(io.BytesIO(image_data))
+        image_bytes = await image.read()
 
         # Prepare the prompt for the vision model
         prompt = """
@@ -110,19 +106,35 @@ async def process_prescription(image: UploadFile = File(...)):
         }
         """
 
-        contents = [prompt, img]
+        contents = [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": image.content_type,
+                            "data": image_bytes
+                        }
+                    }
+                ]
+            }
+        ]
 
         # Generate content with the vision model
         response = client.models.generate_content(
-            model="gemini-pro-vision",
+            model="gemini-1.5-flash",
             contents=contents
         )
         
         # Extract the JSON from the response
         # The response might contain markdown, so we need to clean it
-        json_response = response.text.strip().replace('```json', '').replace('```', '')
+        raw = response.text or ""
+        cleaned = raw.replace("```json", "").replace("```", "").strip()
+        json_response = cleaned
         
         return JSONResponse(content=json.loads(json_response))
 
     except Exception as e:
+        print("Error in /process_prescription:", e)
         return JSONResponse(status_code=500, content={"error": str(e)})
