@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import google.generativeai as genai
+from google import genai
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 from PIL import Image
