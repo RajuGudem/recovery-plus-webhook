@@ -64,7 +64,7 @@ def gemini_webhook(request: ChatRequest):
         ]
         
         response = client.models.generate_content_stream(
-            model="gemini-1.5-pro",
+            model="gemini-pro",
             contents=contents
         )
         
