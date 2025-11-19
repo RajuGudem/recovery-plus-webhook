@@ -6,16 +6,12 @@ from google import genai
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import requests
-
-# Set the environment variable for Google Cloud credentials
-# This is crucial for the Dialogflow client to find the credentials file.
-# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "dialogflow-credentials.json"
+import re
 
 app = FastAPI()
 
-# Add CORS middleware
 origins = [
-    os.environ.get("FRONTEND_URL", "http://localhost:3000")  # In production, replace with your Flutter app's domain.
+    os.environ.get("FRONTEND_URL", "http://localhost:3000")
 ]
 
 app.add_middleware(
@@ -26,11 +22,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize the Gemini Client
-# The client automatically gets the API key from the GEMINI_API_KEY environment variable.
 client = genai.Client()
 
-# Define the request body model
 class ChatRequest(BaseModel):
     sessionId: str
     message: str
@@ -42,10 +35,8 @@ def read_root():
 def stream_generator(response):
     for chunk in response:
         print("STREAM CHUNK:", chunk)
-        # For the free-tier model, the response chunks have 'delta' attribute with 'content'
         if hasattr(chunk, "delta") and hasattr(chunk.delta, "content") and chunk.delta.content:
             yield chunk.delta.content
-        # Fallback: yield whole object for inspection
         else:
             yield str(chunk) + "\n"
 
@@ -54,9 +45,9 @@ def gemini_webhook(request: ChatRequest):
     user_message = request.message
 
     try:
-        contents = [
+        messages = [
             {
-                "role": "user",
+                "author": "user",
                 "content": (
                     "System instruction: You are a friendly recovery assistant. "
                     "Always reply politely and supportively.\n\n"
@@ -65,10 +56,9 @@ def gemini_webhook(request: ChatRequest):
             }
         ]
         
-        response = client.chat.completions.create(
-            model="models/gemini-2.0-turbo",
-            messages=contents,
-            stream=True
+        response = client.models.generate_content_stream(
+            model="gemini-2.0-turbo",
+            messages=messages,
         )
         
         return StreamingResponse(stream_generator(response), media_type="text/plain")
@@ -83,7 +73,6 @@ class PrescriptionRequest(BaseModel):
 async def process_prescription(image: UploadFile = File(...)):
     try:
         image_bytes = await image.read()
-
         OCR_API_KEY = os.environ.get("OCR_SPACE_API_KEY")
 
         payload = {
@@ -106,7 +95,35 @@ async def process_prescription(image: UploadFile = File(...)):
         except Exception:
             parsed_text = ""
 
-        return JSONResponse(content={"text": parsed_text})
+        medications = []
+
+        med_pattern = re.compile(
+            r"(?P<name>[A-Za-z0-9\-]+)\s*(?P<dosage>\d+mg|\d+ml)?\s*(?P<frequency>\d+\s*times\s*a\s*day|\w+:\w+)?",
+            re.IGNORECASE
+        )
+
+        for match in med_pattern.finditer(parsed_text):
+            med_name = match.group("name")
+            dosage = match.group("dosage") or ""
+            frequency = match.group("frequency") or ""
+
+            times = []
+            if "once a day" in frequency.lower():
+                times = ["08:00"]
+            elif "twice a day" in frequency.lower():
+                times = ["08:00", "20:00"]
+            elif "three times a day" in frequency.lower():
+                times = ["08:00", "14:00", "20:00"]
+            elif re.match(r"\d{1,2}:\d{2}", frequency):
+                times = [frequency]
+
+            medications.append({
+                "name": med_name,
+                "dosage": dosage,
+                "times": times
+            })
+
+        return JSONResponse(content={"medications": medications})
 
     except Exception as e:
         print("Error in /process_prescription:", e)
