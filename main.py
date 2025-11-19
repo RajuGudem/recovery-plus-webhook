@@ -27,9 +27,7 @@ app.add_middleware(
 
 # Initialize the Gemini Client
 # The client automatically gets the API key from the GEMINI_API_KEY environment variable.
-client = genai.Client(
-    api_endpoint="https://generativelanguage.googleapis.com/"
-)
+client = genai.Client()
 
 # Define the request body model
 class ChatRequest(BaseModel):
