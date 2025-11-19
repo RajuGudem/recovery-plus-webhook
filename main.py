@@ -28,6 +28,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Configure the Gemini API key from environment variable
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+
 # Define the request body model
 class ChatRequest(BaseModel):
     sessionId: str
@@ -36,7 +39,7 @@ class ChatRequest(BaseModel):
 # Initialize Gemini API
 # The API key will be provided via an environment variable in Render
 model = genai.GenerativeModel(
-    'gemini-1.5-pro-latest',
+    'gemini-pro',
     system_instruction=(
         "You are RecoveryPlus Doctor Assistant, a professional and knowledgeable virtual doctor who supports "
         "post-surgery and post-operation patients. You provide medically accurate, clear, and structured guidance "
@@ -94,9 +97,6 @@ async def process_prescription(image: UploadFile = File(...)):
         # Read the image data
         image_data = await image.read()
         img = Image.open(io.BytesIO(image_data))
-
-        # Configure the Gemini API key from environment variable
-        genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
         # Initialize the Gemini Pro Vision model
         vision_model = genai.GenerativeModel('gemini-pro-vision')
