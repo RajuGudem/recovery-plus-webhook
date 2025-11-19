@@ -28,8 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure the Gemini API key from environment variable
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+
 
 # Define the request body model
 class ChatRequest(BaseModel):
