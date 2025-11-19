@@ -3,7 +3,7 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import google.generativeai as genai
-from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import requests
 import re
@@ -29,7 +29,7 @@ if not gemini_api_key:
 genai.configure(api_key=gemini_api_key)
 
 # Initialize the GenerativeModel
-model = genai.GenerativeModel('gemini-2.0-flash')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 class ChatRequest(BaseModel):
     sessionId: str
@@ -39,17 +39,28 @@ class ChatRequest(BaseModel):
 def read_root():
     return {"status": "online"}
 
+def stream_generator(response):
+    for chunk in response:
+        yield chunk.text
+
 @app.post("/gemini-webhook")
 def gemini_webhook(request: ChatRequest):
     user_message = request.message
 
     try:
-        prompt = f"You are a friendly recovery assistant. Always reply politely and supportively. User says: {user_message}"
-        response = model.generate_content(
-            input=prompt
-        )
-        return JSONResponse(content={"reply": response.content[0].text})
+        # Use a conversational structure for the chat
+        contents = [
+            {'role': 'user', 'parts': [{'text': "You are a friendly recovery assistant. Always reply politely and supportively."}]},
+            {'role': 'model', 'parts': [{'text': "Understood. I will be a friendly and supportive recovery assistant."}]},
+            {'role': 'user', 'parts': [{'text': user_message}]}
+        ]
 
+        response = model.generate_content(
+            contents,
+            stream=True
+        )
+
+        return StreamingResponse(stream_generator(response), media_type="text/plain")
     except Exception as e:
         print(f"Error generating content: {e}")
         return JSONResponse(status_code=500, content={"error": "An error occurred while processing your request."})
