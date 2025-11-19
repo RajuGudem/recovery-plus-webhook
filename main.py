@@ -29,7 +29,7 @@ if not gemini_api_key:
 genai.configure(api_key=gemini_api_key)
 
 # Initialize the GenerativeModel
-model = genai.GenerativeModel('gemini-pro')
+model = genai.GenerativeModel('gemini-1.0-pro')
 
 class ChatRequest(BaseModel):
     sessionId: str
