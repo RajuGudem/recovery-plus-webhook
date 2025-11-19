@@ -6,7 +6,6 @@ from google import genai
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 from PIL import Image
-
 import io
 
 # Set the environment variable for Google Cloud credentials
@@ -28,60 +27,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+# Initialize the Gemini Client
+# The client automatically gets the API key from the GEMINI_API_KEY environment variable.
+client = genai.Client()
 
 # Define the request body model
 class ChatRequest(BaseModel):
     sessionId: str
     message: str
 
-# Initialize Gemini API
-# The API key will be provided via an environment variable in Render
-model = genai.GenerativeModel(
-    'gemini-pro',
-    system_instruction=(
-        "You are RecoveryPlus Doctor Assistant, a professional and knowledgeable virtual doctor who supports "
-        "post-surgery and post-operation patients. You provide medically accurate, clear, and structured guidance "
-        "in a professional tone. Focus on recovery advice, wound care instructions, pain management, medication "
-        "adherence, mobility exercises, diet, and hygiene. Always explain information in a clinical yet patient-friendly way. "
-        "If patients describe symptoms such as severe pain, fever, infection signs, bleeding, or breathing difficulties, "
-        "firmly instruct them to immediately contact your doctor or emergency services. Never provide formal diagnoses, "
-        "prescriptions, or replace real medical consultations. Always remind patients that your guidance is supplementary "
-        "and their surgeon/doctor’s advice takes priority."
-    )
-)
-
 @app.get("/")
 def read_root():
     return {"status": "online"}
 
-async def stream_generator(response):
-    async for chunk in response:
+def stream_generator(response):
+    for chunk in response:
         if hasattr(chunk, "text"):
             yield chunk.text
 
 @app.post("/gemini-webhook")
-async def gemini_webhook(request: ChatRequest):
+def gemini_webhook(request: ChatRequest):
     user_message = request.message
 
     try:
-        response = await model.generate_content_async(
-            [
-                {
-                    "role": "model",
-                    "parts": [
-                        {"text": "Hello! I'm here to support you through your recovery. How are you feeling today?"}
-                    ]
-                },
-                {
-                    "role": "user",
-                    "parts": [
-                        {"text": user_message}
-                    ]
-                },
-            ],
+        contents = [
+            {
+                "role": "model",
+                "parts": [
+                    {"text": "Hello! I'm here to support you through your recovery. How are you feeling today?"}
+                ]
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {"text": user_message}
+                ]
+            },
+        ]
+        
+        response = client.models.generate_content(
+            model="gemini-pro",
+            contents=contents,
             stream=True
         )
+        
         return StreamingResponse(stream_generator(response), media_type="text/plain")
     except Exception as e:
         print(f"Error generating content: {e}")
@@ -97,9 +86,6 @@ async def process_prescription(image: UploadFile = File(...)):
         image_data = await image.read()
         img = Image.open(io.BytesIO(image_data))
 
-        # Initialize the Gemini Pro Vision model
-        vision_model = genai.GenerativeModel('gemini-pro-vision')
-        
         # Prepare the prompt for the vision model
         prompt = """
         Analyze the attached prescription image and extract the following information in JSON format:
@@ -125,8 +111,13 @@ async def process_prescription(image: UploadFile = File(...)):
         }
         """
 
+        contents = [prompt, img]
+
         # Generate content with the vision model
-        response = await vision_model.generate_content_async([prompt, img])
+        response = client.models.generate_content(
+            model="gemini-pro-vision",
+            contents=contents
+        )
         
         # Extract the JSON from the response
         # The response might contain markdown, so we need to clean it
