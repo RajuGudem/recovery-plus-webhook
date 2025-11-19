@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import google.generativeai as genai
+from groq import Groq
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import requests
@@ -22,14 +22,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure the Gemini API key
-gemini_api_key = os.environ.get("GEMINI_API_KEY")
-if not gemini_api_key:
-    raise ValueError("GEMINI_API_KEY environment variable not set")
-genai.configure(api_key=gemini_api_key, client_options={"api_endpoint": "generativelanguage.googleapis.com"})
-
-# Initialize the GenerativeModel
-model = genai.GenerativeModel('gemini-1.0-pro')
+# Configure the Groq API key
+groq_api_key = os.environ.get("GROQ_API_KEY")
+if not groq_api_key:
+    raise ValueError("GROQ_API_KEY environment variable not set")
+groq_client = Groq(api_key=groq_api_key)
 
 class ChatRequest(BaseModel):
     sessionId: str
@@ -41,22 +38,22 @@ def read_root():
 
 def stream_generator(response):
     for chunk in response:
-        yield chunk.text
+        if chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
 
-@app.post("/gemini-webhook")
-def gemini_webhook(request: ChatRequest):
+@app.post("/groq-webhook")
+def groq_webhook(request: ChatRequest):
     user_message = request.message
 
     try:
-        # Use a conversational structure for the chat
-        contents = [
-            {'role': 'user', 'parts': [{'text': "You are a friendly recovery assistant. Always reply politely and supportively."}]},
-            {'role': 'model', 'parts': [{'text': "Understood. I will be a friendly and supportive recovery assistant."}]},
-            {'role': 'user', 'parts': [{'text': user_message}]}
+        messages = [
+            {"role": "system", "content": "You are a friendly recovery assistant. Always reply politely and supportively."},
+            {"role": "user", "content": user_message}
         ]
 
-        response = model.generate_content(
-            contents,
+        response = groq_client.chat.completions.create(
+            messages=messages,
+            model="llama3-8b-8192", # A common Groq model
             stream=True
         )
 
