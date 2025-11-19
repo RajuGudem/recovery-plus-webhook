@@ -40,8 +40,25 @@ def read_root():
 
 def stream_generator(response):
     for chunk in response:
-        if hasattr(chunk, "text"):
+        print("STREAM CHUNK:", chunk)
+        # Try direct text
+        if hasattr(chunk, "text") and chunk.text:
             yield chunk.text
+        # Try candidates → content → text (common Gemini v1beta fallback)
+        elif hasattr(chunk, "candidates"):
+            try:
+                candidate = chunk.candidates[0]
+                part = candidate.content.parts[0]
+                text_val = getattr(part, "text", None)
+                if text_val:
+                    yield text_val
+                else:
+                    yield str(chunk) + "\n"
+            except Exception:
+                yield str(chunk) + "\n"
+        # Fallback: yield whole object for inspection
+        else:
+            yield str(chunk) + "\n"
 
 @app.post("/gemini-webhook")
 def gemini_webhook(request: ChatRequest):
@@ -50,7 +67,7 @@ def gemini_webhook(request: ChatRequest):
     try:
         contents = [
             {
-                "role": "model",
+                "role": "system",
                 "parts": [
                     {"text": "Hello! I'm here to support you through your recovery. How are you feeling today?"}
                 ]
@@ -64,7 +81,7 @@ def gemini_webhook(request: ChatRequest):
         ]
         
         response = client.models.generate_content_stream(
-            model="gemini-1.5-pro-001",
+            model="gemini-1.0-pro",
             contents=contents
         )
         
@@ -123,7 +140,7 @@ async def process_prescription(image: UploadFile = File(...)):
 
         # Generate content with the vision model
         response = client.models.generate_content(
-            model="gemini-1.5-pro-001",
+            model="gemini-1.0-pro-vision",
             contents=contents
         )
         
