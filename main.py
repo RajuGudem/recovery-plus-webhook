@@ -81,7 +81,7 @@ def gemini_webhook(request: ChatRequest):
         ]
         
         response = client.models.generate_content_stream(
-            model="gemini-1.0-pro",
+            model="gemini-pro",
             contents=contents
         )
         
@@ -140,7 +140,7 @@ async def process_prescription(image: UploadFile = File(...)):
 
         # Generate content with the vision model
         response = client.models.generate_content(
-            model="gemini-1.0-pro-vision",
+            model="gemini-pro-vision",
             contents=contents
         )
         
