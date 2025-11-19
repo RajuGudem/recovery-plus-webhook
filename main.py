@@ -53,7 +53,7 @@ def gemini_webhook(request: ChatRequest):
 
         response = client.models.generate_content_stream(
             model="gemini-2.0-flash",  # free tier model
-            prompt=prompt_text,
+            input=prompt_text,
         )
 
         return StreamingResponse(stream_generator(response), media_type="text/plain")
