@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
-from deepseek_sdk import DeepSeekClient
+from deepseek import DeepSeekClient
 from fastapi.responses import StreamingResponse, JSONResponse
 
 app = FastAPI()
