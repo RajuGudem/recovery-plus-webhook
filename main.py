@@ -2,6 +2,7 @@ import os
 import base64
 import re
 import json
+import tempfile
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -79,8 +80,14 @@ async def process_prescription(image: UploadFile = File(...)):
     try:
         image_bytes = await image.read()
         
+        # Save uploaded file to a temporary file
+        suffix = os.path.splitext(image.filename)[1] if image.filename else ""
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+            tmp_file.write(image_bytes)
+            tmp_path = tmp_file.name
+        
         # Step 1: OCR
-        ocr_result = ocr_client.parse(image_bytes)
+        ocr_result = ocr_client.parse(tmp_path)
         if isinstance(ocr_result, dict):
             extracted_text = ocr_result.get("text", "")
         else:
