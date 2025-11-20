@@ -5,4 +5,4 @@ groq
 python-dotenv
 python-multipart
 requests
-deepseek
+deepseek-sdk
