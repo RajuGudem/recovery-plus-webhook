@@ -101,7 +101,7 @@ async def process_prescription(image: UploadFile = File(...)):
 
         # More realistic medicine pattern
         medicine_line_pattern = re.compile(
-            r"(?P<name>[A-Za-z][A-Za-z0-9\-\s]{2,20})\s*(?P<dosage>\d+\s?(?:mg|ml|MCG|mcg|g))?",
+            r"(?P<name>[A-Za-z][A-Za-z0-9\-\s]{1,30})\s+(?P<dosage>\d{1,4}\s?(mg|ml|mcg|MCG|g))",
             re.IGNORECASE
         )
 
@@ -127,6 +127,11 @@ async def process_prescription(image: UploadFile = File(...)):
             line_clean = line.strip()
 
             if len(line_clean) < 3:
+                continue
+
+            # Skip lines that are not likely medicine instructions
+            if not re.search(r"\d+\s?(mg|ml|MCG|mcg|g)", line_clean, re.IGNORECASE) \
+               and not re.search(r"\b(1-0-1|1-1-1|0-0-1|0-1-1|1-1-0|od|bd|tds|hs|once|twice|daily)\b", line_clean, re.IGNORECASE):
                 continue
 
             # Match medicine name + dosage
@@ -155,11 +160,13 @@ async def process_prescription(image: UploadFile = File(...)):
             if not times:
                 times = ["08:00"]
 
-            medications.append({
-                "name": name,
-                "dosage": dosage,
-                "timings": times
-            })
+            # Ensure medicine name and dosage are meaningful
+            if len(name) >= 2 and dosage:
+                medications.append({
+                    "name": name.strip(),
+                    "dosage": dosage.strip(),
+                    "timings": times
+                })
 
         return JSONResponse(content={"medications": medications, "exercises": []}) # exercises are not handled here
 
