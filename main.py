@@ -7,10 +7,18 @@ from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import requests
 import re
-from PIL import Image, ImageEnhance
-from PIL import ImageFilter
-from PIL import ImageOps
 import io
+import time
+
+# Optional imports for advanced image processing
+try:
+    import cv2
+    import numpy as np
+    OPENCV_AVAILABLE = True
+except ImportError:
+    OPENCV_AVAILABLE = False
+
+from PIL import Image, ImageOps
 
 app = FastAPI()
 
@@ -52,102 +60,96 @@ def stream_generator(response):
 @app.post("/groq-webhook")
 def groq_webhook(request: ChatRequest):
     user_message = request.message
-
     try:
         messages = [
             {"role": "system", "content": "You are a friendly recovery assistant. Always reply politely and supportively."},
             {"role": "user", "content": user_message}
         ]
-
         response = groq_client.chat.completions.create(
             messages=messages,
-            model="llama-3.1-8b-instant", # A common Groq model
+            model="llama-3.1-8b-instant",
             stream=True
         )
-
         return StreamingResponse(stream_generator(response), media_type="text/plain")
     except Exception as e:
         print(f"Error generating content: {e}")
         return JSONResponse(status_code=500, content={"error": "An error occurred while processing your request."})
 
-class PrescriptionRequest(BaseModel):
-    image: UploadFile
+async def preprocess_image(image_bytes: bytes) -> bytes:
+    """Applies advanced preprocessing steps to the image to improve OCR quality."""
+    if OPENCV_AVAILABLE:
+        try:
+            print("Attempting preprocessing with OpenCV...")
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+            
+            # Denoise
+            denoised_img = cv2.fastNlMeansDenoising(img, None, h=10, templateWindowSize=7, searchWindowSize=21)
+            
+            # CLAHE
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            clahe_img = clahe.apply(denoised_img)
+            
+            # Adaptive Thresholding
+            thresh_img = cv2.adaptiveThreshold(clahe_img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+            
+            _, buffer = cv2.imencode('.png', thresh_img)
+            print("Successfully preprocessed image with OpenCV.")
+            return buffer.tobytes()
+        except Exception as e:
+            print(f"OpenCV preprocessing failed: {e}. Falling back to Pillow.")
+            # Fall through to Pillow fallback
+
+    # Pillow fallback
+    try:
+        print("Attempting preprocessing with Pillow...")
+        pil_image = Image.open(io.BytesIO(image_bytes)).convert("L")
+        pil_image = ImageOps.autocontrast(pil_image)
+        pil_image = pil_image.point(lambda p: 255 if p > 128 else 0) # Simple thresholding
+        
+        buffer = io.BytesIO()
+        pil_image.save(buffer, format="PNG")
+        print("Successfully preprocessed image with Pillow.")
+        return buffer.getvalue()
+    except Exception as e:
+        print(f"Pillow preprocessing failed: {e}. Using original image.")
+        return image_bytes
+
+@app.post("/debug-image")
+async def debug_image_endpoint(image: UploadFile = File(...)):
+    image_bytes = await image.read()
+    processed_bytes = await preprocess_image(image_bytes)
+    return StreamingResponse(io.BytesIO(processed_bytes), media_type="image/png")
 
 @app.post("/process_prescription")
 async def process_prescription(image: UploadFile = File(...)):
     try:
         image_bytes = await image.read()
-        # --- Preprocess image to improve OCR accuracy ---
-        try:
-            pil_image = Image.open(io.BytesIO(image_bytes))
+        processed_image_bytes = await preprocess_image(image_bytes)
 
-            # --- Convert to grayscale ---
-            pil_image = pil_image.convert("L")
-
-            # --- Auto contrast enhancement ---
-            from PIL import ImageOps
-            pil_image = ImageOps.autocontrast(pil_image)
-
-            # --- Remove noise using stronger median filter ---
-            pil_image = pil_image.filter(ImageFilter.MedianFilter(size=5))
-
-            # --- Apply Unsharp Mask for better text edges ---
-            pil_image = pil_image.filter(ImageFilter.UnsharpMask(radius=2, percent=200, threshold=3))
-
-            # --- Adaptive thresholding (manual Otsu-like method) ---
-            histogram = pil_image.histogram()
-            total = sum(histogram)
-            sumB = 0
-            wB = 0
-            maximum = 0.0
-            sum1 = sum(i * histogram[i] for i in range(256))
-
-            threshold = 0
-            for i in range(256):
-                wB += histogram[i]
-                if wB == 0:
-                    continue
-                wF = total - wB
-                if wF == 0:
-                    break
-                sumB += i * histogram[i]
-                mB = sumB / wB
-                mF = (sum1 - sumB) / wF
-                between = wB * wF * (mB - mF) ** 2
-                if between >= maximum:
-                    threshold = i
-                    maximum = between
-
-            # Apply threshold
-            pil_image = pil_image.point(lambda p: 255 if p > threshold else 0)
-
-            # --- Save processed image back to bytes ---
-            img_buffer = io.BytesIO()
-            pil_image.save(img_buffer, format="PNG")
-            image_bytes = img_buffer.getvalue()
-        except Exception as e:
-            print("Preprocessing failed, using original image. Error:", e)
         OCR_API_KEY = os.environ.get("OCR_SPACE_API_KEY")
+        if not OCR_API_KEY:
+            return JSONResponse(status_code=500, content={"error": "OCR_SPACE_API_KEY is not set."})
 
-        payload = {
-            "apikey": OCR_API_KEY,
-            "language": "eng",
-            "isOverlayRequired": False,
-            "detectOrientation": True,
-            "scale": True
-        }
-        files = {
-            "file": (image.filename, image_bytes, image.content_type)
-        }
-        ocr_response = requests.post(
-            "https://api.ocr.space/parse/image",
-            data=payload,
-            files=files
-        )
-        ocr_data = ocr_response.json()
+        payload = {"apikey": OCR_API_KEY, "OCREngine": "3", "language": "eng"}
+        files = {"file": ("prescription.png", processed_image_bytes, "image/png")}
+        
+        ocr_data = None
+        for attempt in range(4):
+            try:
+                ocr_response = requests.post("https://api.ocr.space/parse/image", data=payload, files=files, timeout=45)
+                print(f"OCR Response Status: {ocr_response.status_code}, Text: {ocr_response.text[:100]}")
+                if ocr_response.status_code == 200:
+                    ocr_data = ocr_response.json()
+                    if ocr_data.get("ParsedResults"):
+                        break
+                time.sleep(1) # Wait before retrying
+            except requests.exceptions.RequestException as req_e:
+                print(f"OCR attempt {attempt + 1} failed: {req_e}")
+                time.sleep(1)
 
-        if not ocr_data.get("ParsedResults"):
-            return JSONResponse(status_code=400, content={"error": "Could not parse image."})
+        if not ocr_data or not ocr_data.get("ParsedResults"):
+            return JSONResponse(status_code=400, content={"error": "Could not parse image after multiple attempts."})
 
         parsed_text = ocr_data["ParsedResults"][0]["ParsedText"]
         print("DEBUG Parsed Prescription:\n", parsed_text)
@@ -155,109 +157,62 @@ async def process_prescription(image: UploadFile = File(...)):
         medications = []
         lines = parsed_text.split("\n")
 
-        # More realistic medicine pattern
-        medicine_line_pattern = re.compile(
-            r"(?P<name>[A-Za-z][A-Za-z0-9\-\s]{1,50})\s*(?P<dosage>\d{1,4}\s?(mg|ml|mcg|MCG|g))",
-            re.IGNORECASE
-        )
-
-        # Frequency patterns found in Indian prescriptions
+        medicine_keywords = ["tab", "tablet", "cap", "capsule", "syr", "syrup", "inj", "injection", "drop", "drops", "cream", "ointment"]
         frequency_patterns = {
-            "1-0-1": ["08:00", "20:00"],
-            "1-1-1": ["08:00", "14:00", "20:00"],
-            "0-0-1": ["20:00"],
-            "0-1-1": ["14:00", "20:00"],
-            "1-1-0": ["08:00", "14:00"],
-            "od": ["08:00"],
-            "bd": ["08:00", "20:00"],
-            "tds": ["08:00", "14:00", "20:00"],
-            "hs": ["20:00"],
-            "once": ["08:00"],
-            "twice": ["08:00", "20:00"],
-            "daily": ["08:00"]
+            "1-0-1": ["Morning", "Night"],
+            "1-1-1": ["Morning", "Noon", "Night"],
+            "0-0-1": ["Night"],
+            "0-1-0": ["Noon"],
+            "1-0-0": ["Morning"],
+            "1-1-0": ["Morning", "Noon"],
+            "0-1-1": ["Noon", "Night"],
+            "od": ["Morning"], "bd": ["Morning", "Night"], "tds": ["Morning", "Noon", "Night"],
+            "hs": ["Night"], "once": ["Morning"], "twice": ["Morning", "Night"], "daily": ["Morning"]
         }
-
-        # --- Improved medicine detection (even without dosage) ---
-        medicine_name_only_pattern = re.compile(
-            r"\b([A-Za-z][A-Za-z0-9\-]{2,30})\b",
-            re.IGNORECASE
-        )
-
-        medicine_keywords = [
-            "tab", "tablet", "cap", "capsule", "syr", "syrup",
-            "inj", "injection", "drop", "drops", "cream", "ointment"
-        ]
 
         for line in lines:
             line_clean = line.strip()
-            if len(line_clean) < 2:
-                continue
+            if len(line_clean) < 3: continue
 
             lower_line = line_clean.lower()
-
-            # Step 1: Detect lines that look like medicine instructions
-            is_medicine_line = False
-
-            # Contains medicine keyword
-            if any(k in lower_line for k in medicine_keywords):
-                is_medicine_line = True
-
-            # Contains frequency
-            if any(freq in lower_line for freq in frequency_patterns.keys()):
-                is_medicine_line = True
-
-            # Contains mg/ml but name may be missing
-            if re.search(r"\d+\s?(mg|ml|mcg|g)", lower_line):
-                is_medicine_line = True
-
-            if not is_medicine_line:
+            
+            # Basic check if the line could be a medication
+            if not any(k in lower_line for k in medicine_keywords) and not re.search(r'\d', lower_line):
                 continue
 
-            # Step 2: Extract dosage (if present)
-            dosage_match = re.search(r"(\d{1,4}\s?(mg|ml|mcg|g))", line_clean, re.IGNORECASE)
+            # Extract name, dosage
+            name_match = re.match(r"^\s*([a-zA-Z0-9\.\s-]+)", line_clean)
+            name = name_match.group(1).strip() if name_match else ""
+            
+            # Clean up name from keywords
+            for kw in medicine_keywords:
+                name = re.sub(r'\b' + kw + r'\b', '', name, flags=re.IGNORECASE).strip()
+
+            if len(name) < 3: continue
+
+            dosage_match = re.search(r"(\d+\s?(mg|ml|g|mcg))", line_clean, re.IGNORECASE)
             dosage = dosage_match.group(1) if dosage_match else ""
 
-            # Step 3: Extract name even without dosage
-            name = ""
-            tokens = line_clean.split()
-            for t in tokens:
-                if t.lower() in medicine_keywords:
-                    continue
-                if re.match(r"[A-Za-z][A-Za-z0-9\-]{2,30}", t):
-                    name = t
-                    break
-            if not name:
-                name_match = medicine_name_only_pattern.search(line_clean)
-                if name_match:
-                    name = name_match.group(1)
-
-            if not name:
-                continue
-
-            # Step 4: Extract frequencies
+            # Extract frequencies
             times = []
             for key, tlist in frequency_patterns.items():
-                if key.lower() in lower_line:
+                if re.search(r'\b' + key + r'\b', lower_line):
                     times = tlist
                     break
-
-            # Step 5: Look for HH:MM manual times
-            time_match = re.findall(r"([0-2]?\d:[0-5]\d)", line_clean)
-            if time_match:
-                times = time_match
-
-            # Step 6: Default time
+            
             if not times:
-                times = ["08:00"]
+                if "morning" in lower_line: times.append("Morning")
+                if "noon" in lower_line or "afternoon" in lower_line: times.append("Noon")
+                if "night" in lower_line: times.append("Night")
 
-            medications.append({
-                "name": name.strip(),
-                "dosage": dosage.strip() if dosage else "",
-                "timings": times
-            })
+            if not times: times = ["As directed"]
 
-        print("DEBUG Final Parsed Output:", {"medications": medications, "exercises": []})
-        return JSONResponse(content={"medications": medications, "exercises": []}) # exercises are not handled here
+            # Avoid adding duplicates
+            if not any(med['name'].lower() == name.lower() for med in medications):
+                medications.append({"name": name, "dosage": dosage, "timings": times})
+
+        print("DEBUG Final Parsed Output:", {"medications": medications})
+        return JSONResponse(content={"medications": medications, "exercises": []})
 
     except Exception as e:
         print(f"Error in /process_prescription: {e}")
