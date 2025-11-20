@@ -131,7 +131,7 @@ async def process_prescription(image: UploadFile = File(...)):
         if not OCR_API_KEY:
             return JSONResponse(status_code=500, content={"error": "OCR_SPACE_API_KEY is not set."})
 
-        data = {"apikey": OCR_API_KEY, "OCREngine": "3"}
+        data = {"apikey": OCR_API_KEY, "OCREngine": "3", "isOverlayRequired": False, "detectOrientation": True, "scale": True}
         files = {"file": ("prescription.png", processed_image_bytes, "image/png")}
         
         ocr_data = None
