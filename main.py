@@ -57,7 +57,7 @@ def groq_webhook(request: ChatRequest):
 
         response = groq_client.chat.completions.create(
             messages=messages,
-            model="mixtral-8x7b-32768", # A common Groq model
+            model="llama-3.1-8b-instant", # A common Groq model
             stream=True
         )
 
