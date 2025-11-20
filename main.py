@@ -7,6 +7,10 @@ from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import requests
 import re
+from PIL import Image, ImageEnhance
+from PIL import ImageFilter
+from PIL import ImageOps
+import io
 
 app = FastAPI()
 
@@ -73,6 +77,56 @@ class PrescriptionRequest(BaseModel):
 async def process_prescription(image: UploadFile = File(...)):
     try:
         image_bytes = await image.read()
+        # --- Preprocess image to improve OCR accuracy ---
+        try:
+            pil_image = Image.open(io.BytesIO(image_bytes))
+
+            # --- Convert to grayscale ---
+            pil_image = pil_image.convert("L")
+
+            # --- Auto contrast enhancement ---
+            from PIL import ImageOps
+            pil_image = ImageOps.autocontrast(pil_image)
+
+            # --- Remove noise using stronger median filter ---
+            pil_image = pil_image.filter(ImageFilter.MedianFilter(size=5))
+
+            # --- Apply Unsharp Mask for better text edges ---
+            pil_image = pil_image.filter(ImageFilter.UnsharpMask(radius=2, percent=200, threshold=3))
+
+            # --- Adaptive thresholding (manual Otsu-like method) ---
+            histogram = pil_image.histogram()
+            total = sum(histogram)
+            sumB = 0
+            wB = 0
+            maximum = 0.0
+            sum1 = sum(i * histogram[i] for i in range(256))
+
+            threshold = 0
+            for i in range(256):
+                wB += histogram[i]
+                if wB == 0:
+                    continue
+                wF = total - wB
+                if wF == 0:
+                    break
+                sumB += i * histogram[i]
+                mB = sumB / wB
+                mF = (sum1 - sumB) / wF
+                between = wB * wF * (mB - mF) ** 2
+                if between >= maximum:
+                    threshold = i
+                    maximum = between
+
+            # Apply threshold
+            pil_image = pil_image.point(lambda p: 255 if p > threshold else 0)
+
+            # --- Save processed image back to bytes ---
+            img_buffer = io.BytesIO()
+            pil_image.save(img_buffer, format="PNG")
+            image_bytes = img_buffer.getvalue()
+        except Exception as e:
+            print("Preprocessing failed, using original image. Error:", e)
         OCR_API_KEY = os.environ.get("OCR_SPACE_API_KEY")
 
         payload = {
@@ -122,58 +176,84 @@ async def process_prescription(image: UploadFile = File(...)):
             "daily": ["08:00"]
         }
 
-        lines = parsed_text.split("\n")
+        # --- Improved medicine detection (even without dosage) ---
+        medicine_name_only_pattern = re.compile(
+            r"\b([A-Za-z][A-Za-z0-9\-]{2,30})\b",
+            re.IGNORECASE
+        )
+
+        medicine_keywords = [
+            "tab", "tablet", "cap", "capsule", "syr", "syrup",
+            "inj", "injection", "drop", "drops", "cream", "ointment"
+        ]
 
         for line in lines:
             line_clean = line.strip()
-
-            if len(line_clean) < 3:
+            if len(line_clean) < 2:
                 continue
 
-            # Allow lines that contain dosage OR frequency
-            if not re.search(r"\d+\s?(mg|ml|MCG|mcg|g)", line_clean, re.IGNORECASE) \
-               and not re.search(r"\b(1-0-1|1-1-1|0-0-1|0-1-1|1-1-0|od|bd|tds|hs|once|twice|daily)\b", line_clean, re.IGNORECASE):
+            lower_line = line_clean.lower()
+
+            # Step 1: Detect lines that look like medicine instructions
+            is_medicine_line = False
+
+            # Contains medicine keyword
+            if any(k in lower_line for k in medicine_keywords):
+                is_medicine_line = True
+
+            # Contains frequency
+            if any(freq in lower_line for freq in frequency_patterns.keys()):
+                is_medicine_line = True
+
+            # Contains mg/ml but name may be missing
+            if re.search(r"\d+\s?(mg|ml|mcg|g)", lower_line):
+                is_medicine_line = True
+
+            if not is_medicine_line:
                 continue
 
-            # Match medicine name + dosage
-            med_match = medicine_line_pattern.search(line_clean)
-            if not med_match:
-                # Try alternative "Tab/Mg split" format
-                med_match = re.search(r"(?:Tab|Cap|Inj)\s*([A-Za-z0-9\- ]+)\s*(\d{1,4}\s?(mg|ml|mcg|MCG|g))", line_clean, re.IGNORECASE)
-                if med_match:
-                    name = med_match.group(1)
-                    dosage = med_match.group(2)
-                else:
+            # Step 2: Extract dosage (if present)
+            dosage_match = re.search(r"(\d{1,4}\s?(mg|ml|mcg|g))", line_clean, re.IGNORECASE)
+            dosage = dosage_match.group(1) if dosage_match else ""
+
+            # Step 3: Extract name even without dosage
+            name = ""
+            tokens = line_clean.split()
+            for t in tokens:
+                if t.lower() in medicine_keywords:
                     continue
-            else:
-                name = med_match.group("name").strip()
-                dosage = med_match.group("dosage") or ""
+                if re.match(r"[A-Za-z][A-Za-z0-9\-]{2,30}", t):
+                    name = t
+                    break
+            if not name:
+                name_match = medicine_name_only_pattern.search(line_clean)
+                if name_match:
+                    name = name_match.group(1)
 
-            # Default times if no frequency found
+            if not name:
+                continue
+
+            # Step 4: Extract frequencies
             times = []
-
-            # Search for freq pattern
             for key, tlist in frequency_patterns.items():
-                if key.lower() in line_clean.lower():
+                if key.lower() in lower_line:
                     times = tlist
                     break
 
-            # If no explicit time, check for raw HH:MM
+            # Step 5: Look for HH:MM manual times
             time_match = re.findall(r"([0-2]?\d:[0-5]\d)", line_clean)
             if time_match:
                 times = time_match
 
-            # If still no times → default OD (once daily)
+            # Step 6: Default time
             if not times:
                 times = ["08:00"]
 
-            # Ensure medicine name and dosage are meaningful
-            if len(name) >= 2 and dosage:
-                medications.append({
-                    "name": name.strip(),
-                    "dosage": dosage.strip(),
-                    "timings": times
-                })
+            medications.append({
+                "name": name.strip(),
+                "dosage": dosage.strip() if dosage else "",
+                "timings": times
+            })
 
         print("DEBUG Final Parsed Output:", {"medications": medications, "exercises": []})
         return JSONResponse(content={"medications": medications, "exercises": []}) # exercises are not handled here
