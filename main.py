@@ -1,5 +1,6 @@
 import os
 import base64
+import re
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -73,62 +74,52 @@ async def process_prescription(image: UploadFile = File(...)):
         image_bytes = await image.read()
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
 
-        prompt = """
-        Analyze the attached prescription image and extract medication information.
-        Return a JSON object with a single key "medications".
-        The value of "medications" should be a list of objects, where each object has three keys: "name", "dosage", and "timings".
-        - "name": The name of the medication.
-        - "dosage": The dosage (e.g., "500mg", "1 tablet"). If not present, use an empty string.
-        - "timings": A list of strings representing the time of day. Use "Morning", "Noon", or "Night". If the prescription says "1-0-1", use ["Morning", "Night"]. If it says "BD" or "twice daily", use ["Morning", "Night"]. If no timing is specified, use ["As directed"].
-
-        Example output:
-        {
-          "medications": [
-            {
-              "name": "Dolo",
-              "dosage": "650mg",
-              "timings": ["Morning", "Night"]
-            }
-          ]
-        }
-        """
-
-        response = deepseek_client.chat.completions.create(
-            model="deepseek-vl-chat",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": f"data:image/jpeg;base64,{base64_image}",
-                        },
-                    ],
-                },
-            ],
-            max_tokens=2000,
-            stream=False  # We need the full JSON response at once
+        # Use DeepSeek-OCR to extract text
+        ocr_response = deepseek_client.ocr(
+            image_base64=base64_image,
+            language="eng"
         )
 
-        response_text = response.choices[0].message.content
-        
-        # Clean the response to get only the JSON part
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if not json_match:
-            print(f"Error: No JSON found in DeepSeek response. Response was: {response_text}")
-            return JSONResponse(status_code=500, content={"error": "Failed to parse prescription from AI response."})
+        if not ocr_response or "text" not in ocr_response:
+            print(f"Error: DeepSeek OCR did not return any text. Response: {ocr_response}")
+            return JSONResponse(status_code=500, content={"error": "Failed to extract text from prescription."})
 
-        json_string = json_match.group(0)
-        parsed_json = json.loads(json_string)
+        extracted_text = ocr_response["text"]
+        print(f"DEBUG Extracted Text: {extracted_text}")
 
-        # Ensure the response has the expected structure
-        if "medications" not in parsed_json:
-            parsed_json = {"medications": [], "exercises": []}
-        else:
-            parsed_json["exercises"] = []
+        # Parse medications from extracted text
+        medications = []
+        lines = extracted_text.splitlines()
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            match = re.match(r'([A-Za-z0-9\-]+)\s*(.*)', line)
+            if match:
+                name = match.group(1)
+                dosage = match.group(2).strip() if match.group(2) else ""
+                timings = []
+                if re.search(r'1-0-1|BD|twice daily', line, re.IGNORECASE):
+                    timings = ["Morning", "Night"]
+                elif re.search(r'1-1-1|TDS|three times daily', line, re.IGNORECASE):
+                    timings = ["Morning", "Noon", "Night"]
+                elif re.search(r'HS|night', line, re.IGNORECASE):
+                    timings = ["Night"]
+                else:
+                    timings = ["As directed"]
 
+                medications.append({
+                    "name": name,
+                    "dosage": dosage,
+                    "timings": timings
+                })
 
+        parsed_json = {
+            "medications": medications,
+            "exercises": []
+        }
+
+        print(f"DEBUG Final Parsed Output: {parsed_json}")
         return JSONResponse(content=parsed_json)
 
     except Exception as e:

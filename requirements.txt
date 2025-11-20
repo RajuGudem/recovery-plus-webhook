@@ -4,4 +4,4 @@ uvicorn
 groq
 python-dotenv
 python-multipart
-deepseek
+deepseek==1.0.0
