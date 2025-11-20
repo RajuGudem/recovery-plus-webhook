@@ -35,7 +35,10 @@ deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY")
 if not deepseek_api_key:
     raise ValueError("DEEPSEEK_API_KEY environment variable not set")
 deepseek_client = DeepSeekClient(api_key=deepseek_api_key)
-ocr_client = DeepSeekOCR(api_key=deepseek_api_key)
+ocr_client = DeepSeekOCR(
+    api_key=deepseek_api_key,
+    base_url="https://api.deepseek.com/v1/ocr"
+)
 
 
 class ChatRequest(BaseModel):
