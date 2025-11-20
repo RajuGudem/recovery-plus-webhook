@@ -38,7 +38,7 @@ if not deepseek_api_key:
 deepseek_client = DeepSeekClient(api_key=deepseek_api_key)
 ocr_client = DeepSeekOCR(
     api_key=deepseek_api_key,
-    base_url="https://api.deepseek.com/v1/ocr"
+    base_url="https://api.deepseek.com/v1/ocr/parse"
 )
 
 
