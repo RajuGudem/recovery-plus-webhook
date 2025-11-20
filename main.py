@@ -102,7 +102,7 @@ async def process_prescription(image: UploadFile = File(...)):
         }
         """
 
-        response = deepseek_client.chat.completions.create(
+        response = deepseek_client.chat_completions.create(
             model="deepseek-vl-chat",
             messages=[
                 {
@@ -114,7 +114,7 @@ async def process_prescription(image: UploadFile = File(...)):
                             "image_url": f"data:image/jpeg;base64,{base64_image}",
                         },
                     ],
-                },
+                }
             ],
             max_tokens=3000,
             stream=False
