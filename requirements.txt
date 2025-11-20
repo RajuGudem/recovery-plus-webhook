@@ -4,8 +4,4 @@ uvicorn
 groq
 python-dotenv
 python-multipart
-pillow
-requests
-opencv-python-headless
-numpy
-scipy
+deepseek
