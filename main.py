@@ -131,13 +131,13 @@ async def process_prescription(image: UploadFile = File(...)):
         if not OCR_API_KEY:
             return JSONResponse(status_code=500, content={"error": "OCR_SPACE_API_KEY is not set."})
 
-        payload = {"apikey": OCR_API_KEY, "OCREngine": "3", "language": "eng"}
+        data = {"apikey": OCR_API_KEY, "OCREngine": "3", "language": "eng"}
         files = {"file": ("prescription.png", processed_image_bytes, "image/png")}
         
         ocr_data = None
         for attempt in range(4):
             try:
-                ocr_response = requests.post("https://api.ocr.space/parse/image", data=payload, files=files, timeout=45)
+                ocr_response = requests.post("https://api.ocr.space/parse/image", data=data, files=files, timeout=45)
                 print(f"OCR Response Status: {ocr_response.status_code}, Text: {ocr_response.text[:100]}")
                 if ocr_response.status_code == 200:
                     ocr_data = ocr_response.json()
