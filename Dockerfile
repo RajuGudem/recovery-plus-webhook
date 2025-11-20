@@ -1,16 +1,6 @@
 # Use an official Python runtime as a parent image
 FROM python:3.10-slim-bullseye
 
-# Install Tesseract OCR and its language data
-RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    tesseract-ocr-eng \
-    && rm -rf /var/lib/apt/lists/*
-RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    tesseract-ocr-eng \
-    && rm -rf /var/lib/apt/lists/*
-
 
 # Set the working directory in the container
 WORKDIR /app
