@@ -96,12 +96,13 @@ async def process_prescription(image: UploadFile = File(...)):
             return JSONResponse(status_code=400, content={"error": "Could not parse image."})
 
         parsed_text = ocr_data["ParsedResults"][0]["ParsedText"]
+        print("DEBUG Parsed Prescription:\n", parsed_text)
         
         medications = []
 
         # More realistic medicine pattern
         medicine_line_pattern = re.compile(
-            r"(?P<name>[A-Za-z][A-Za-z0-9\-\s]{1,30})\s+(?P<dosage>\d{1,4}\s?(mg|ml|mcg|MCG|g))",
+            r"(?P<name>[A-Za-z][A-Za-z0-9\-\s]{1,50})\s*(?P<dosage>\d{1,4}\s?(mg|ml|mcg|MCG|g))",
             re.IGNORECASE
         )
 
@@ -129,7 +130,7 @@ async def process_prescription(image: UploadFile = File(...)):
             if len(line_clean) < 3:
                 continue
 
-            # Skip lines that are not likely medicine instructions
+            # Allow lines that contain dosage OR frequency
             if not re.search(r"\d+\s?(mg|ml|MCG|mcg|g)", line_clean, re.IGNORECASE) \
                and not re.search(r"\b(1-0-1|1-1-1|0-0-1|0-1-1|1-1-0|od|bd|tds|hs|once|twice|daily)\b", line_clean, re.IGNORECASE):
                 continue
@@ -137,10 +138,16 @@ async def process_prescription(image: UploadFile = File(...)):
             # Match medicine name + dosage
             med_match = medicine_line_pattern.search(line_clean)
             if not med_match:
-                continue
-
-            name = med_match.group("name").strip()
-            dosage = med_match.group("dosage") or ""
+                # Try alternative "Tab/Mg split" format
+                med_match = re.search(r"(?:Tab|Cap|Inj)\s*([A-Za-z0-9\- ]+)\s*(\d{1,4}\s?(mg|ml|mcg|MCG|g))", line_clean, re.IGNORECASE)
+                if med_match:
+                    name = med_match.group(1)
+                    dosage = med_match.group(2)
+                else:
+                    continue
+            else:
+                name = med_match.group("name").strip()
+                dosage = med_match.group("dosage") or ""
 
             # Default times if no frequency found
             times = []
@@ -168,6 +175,7 @@ async def process_prescription(image: UploadFile = File(...)):
                     "timings": times
                 })
 
+        print("DEBUG Final Parsed Output:", {"medications": medications, "exercises": []})
         return JSONResponse(content={"medications": medications, "exercises": []}) # exercises are not handled here
 
     except Exception as e:
