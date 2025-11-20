@@ -5,4 +5,4 @@ groq
 python-dotenv
 python-multipart
 requests
-deepseek==1.0.0
+deepseek

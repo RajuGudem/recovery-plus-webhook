@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
-from deepseek import DeepSeekClient
+from deepseek import DeepSeek
 from fastapi.responses import StreamingResponse, JSONResponse
 
 app = FastAPI()
@@ -33,7 +33,7 @@ groq_client = Groq(api_key=groq_api_key)
 deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY")
 if not deepseek_api_key:
     raise ValueError("DEEPSEEK_API_KEY environment variable not set")
-deepseek_client = DeepSeekClient(api_key=deepseek_api_key)
+deepseek_client = DeepSeek(api_key=deepseek_api_key)
 
 
 class ChatRequest(BaseModel):
