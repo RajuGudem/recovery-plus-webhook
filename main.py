@@ -96,78 +96,70 @@ async def process_prescription(image: UploadFile = File(...)):
             return JSONResponse(status_code=400, content={"error": "Could not parse image."})
 
         parsed_text = ocr_data["ParsedResults"][0]["ParsedText"]
+        
         medications = []
-        
-        # Keywords to identify lines with medication info
-        med_keywords = ['mg', 'ml', 'tablet', 'capsule', 'daily', 'twice', 'night', 'morning', 'afternoon', 'noon']
-        
-        # Regex to find medication name, dosage, and frequency on a single line
-        med_pattern = re.compile(
-            r"^(?P<name>[a-zA-Z0-9\s.-]+?)\s*(?:\((?P<generic_name>[a-zA-Z\s]+)\))?\s*(?P<dosage>\d+\s*(?:mg|ml|g))?",
+
+        # More realistic medicine pattern
+        medicine_line_pattern = re.compile(
+            r"(?P<name>[A-Za-z][A-Za-z0-9\-\s]{2,20})\s*(?P<dosage>\d+\s?(?:mg|ml|MCG|mcg|g))?",
             re.IGNORECASE
         )
-        
-        # Regex for 1-0-1 style frequency
-        freq_pattern = re.compile(r'(\d)\s*-\s*(\d)\s*-\s*(\d)')
 
-        lines = parsed_text.split('\n')
+        # Frequency patterns found in Indian prescriptions
+        frequency_patterns = {
+            "1-0-1": ["08:00", "20:00"],
+            "1-1-1": ["08:00", "14:00", "20:00"],
+            "0-0-1": ["20:00"],
+            "0-1-1": ["14:00", "20:00"],
+            "1-1-0": ["08:00", "14:00"],
+            "od": ["08:00"],
+            "bd": ["08:00", "20:00"],
+            "tds": ["08:00", "14:00", "20:00"],
+            "hs": ["20:00"],
+            "once": ["08:00"],
+            "twice": ["08:00", "20:00"],
+            "daily": ["08:00"]
+        }
+
+        lines = parsed_text.split("\n")
+
         for line in lines:
-            line = line.strip()
-            if not any(keyword in line.lower() for keyword in med_keywords):
+            line_clean = line.strip()
+
+            if len(line_clean) < 3:
                 continue
 
-            match = med_pattern.match(line)
-            if not match:
+            # Match medicine name + dosage
+            med_match = medicine_line_pattern.search(line_clean)
+            if not med_match:
                 continue
 
-            med_name = match.group("name").strip()
-            if len(med_name) < 3: # Filter out very short, likely incorrect matches
-                continue
+            name = med_match.group("name").strip()
+            dosage = med_match.group("dosage") or ""
 
-            dosage = match.group("dosage") or ""
+            # Default times if no frequency found
             times = []
 
-            # Check for 1-0-1 format
-            freq_match = freq_pattern.search(line)
-            if freq_match:
-                morning, noon, night = [int(i) > 0 for i in freq_match.groups()]
-                if morning:
-                    times.append("Morning")
-                if noon:
-                    times.append("Noon")
-                if night:
-                    times.append("Night")
-            else:
-                # Check for keyword frequencies
-                line_lower = line.lower()
-                if "once" in line_lower or "daily" in line_lower:
-                    times = ["Morning"]
-                elif "twice" in line_lower:
-                    times = ["Morning", "Night"]
-                elif "three times" in line_lower:
-                    times = ["Morning", "Noon", "Night"]
-                
-                if not times: # If no frequency words found, check for time of day
-                    if "morning" in line_lower:
-                        times.append("Morning")
-                    if "noon" in line_lower or "afternoon" in line_lower:
-                        times.append("Noon")
-                    if "night" in line_lower or "evening" in line_lower:
-                        times.append("Night")
-
-            # Avoid adding duplicates
-            is_duplicate = False
-            for med in medications:
-                if med['name'].lower() == med_name.lower():
-                    is_duplicate = True
+            # Search for freq pattern
+            for key, tlist in frequency_patterns.items():
+                if key.lower() in line_clean.lower():
+                    times = tlist
                     break
-            
-            if not is_duplicate:
-                medications.append({
-                    "name": med_name,
-                    "dosage": dosage.strip(),
-                    "timings": times if times else ["As directed"]
-                })
+
+            # If no explicit time, check for raw HH:MM
+            time_match = re.findall(r"([0-2]?\d:[0-5]\d)", line_clean)
+            if time_match:
+                times = time_match
+
+            # If still no times → default OD (once daily)
+            if not times:
+                times = ["08:00"]
+
+            medications.append({
+                "name": name,
+                "dosage": dosage,
+                "timings": times
+            })
 
         return JSONResponse(content={"medications": medications, "exercises": []}) # exercises are not handled here
 
