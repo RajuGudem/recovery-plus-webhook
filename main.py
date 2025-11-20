@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from groq import Groq
 from deepseek import DeepSeekClient
+from deepseek_ocr import DeepSeekOCR
 from fastapi.responses import StreamingResponse, JSONResponse
 
 app = FastAPI()
@@ -34,6 +35,7 @@ deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY")
 if not deepseek_api_key:
     raise ValueError("DEEPSEEK_API_KEY environment variable not set")
 deepseek_client = DeepSeekClient(api_key=deepseek_api_key)
+ocr_client = DeepSeekOCR(api_key=deepseek_api_key)
 
 
 class ChatRequest(BaseModel):
@@ -73,71 +75,63 @@ def groq_webhook(request: ChatRequest):
 async def process_prescription(image: UploadFile = File(...)):
     try:
         image_bytes = await image.read()
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        
+        # Step 1: OCR
+        ocr_result = ocr_client.parse(image_bytes)
+        if isinstance(ocr_result, dict):
+            extracted_text = ocr_result.get("text", "")
+        else:
+            extracted_text = str(ocr_result)
 
-        prompt = """
-        You are an expert medical prescription parser. Analyze the attached prescription image and extract medication information.
+        if not extracted_text.strip():
+            return JSONResponse(status_code=400, content={"error": "No text detected in the prescription image."})
+
+        # Step 2: Prepare prompt for JSON parsing
+        prompt = f"""
+        You are an expert medical prescription parser. Analyze the following prescription text and extract medication information.
         Return ONLY a valid JSON object with a single key "medications".
         The value of "medications" should be a list of objects, where each object has three keys: "name", "dosage", and "timings".
-        - "name": The brand name of the medication.
-        - "dosage": The dosage (e.g., "500mg", "1 tablet"). If not present, use an empty string.
-        - "timings": A list of strings representing the time of day. Use "Morning", "Noon", or "Night".
-          - If the prescription says "1-0-1", use ["Morning", "Night"].
-          - If it says "1-1-1" or "TDS", use ["Morning", "Noon", "Night"].
-          - If it says "0-0-1" or "HS", use ["Night"].
-          - If it says "1-0-0" or "OD", use ["Morning"].
-          - If it says "BD" or "twice daily", use ["Morning", "Night"].
-          - If no timing is specified, use ["As directed"].
-        Do not include any explanations or introductory text outside of the JSON object.
+        Use the following rules for timings:
+        - "1-0-1": ["Morning", "Night"]
+        - "1-1-1" or "TDS": ["Morning", "Noon", "Night"]
+        - "0-0-1" or "HS": ["Night"]
+        - "1-0-0" or "OD": ["Morning"]
+        - "BD" or "twice daily": ["Morning", "Night"]
+        - If no timing specified: ["As directed"]
 
-        Example output:
-        {
-          "medications": [
-            {
-              "name": "Dolo",
-              "dosage": "650mg",
-              "timings": ["Morning", "Night"]
-            }
-          ]
-        }
+        Prescription Text:
+        {extracted_text}
         """
 
+        # Step 3: DeepSeek chat completion
         response = deepseek_client.chat_completion(
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": f"data:image/jpeg;base64,{base64_image}",
-                        },
-                    ],
-                }
-            ],
+            messages=[{"role": "user", "content": prompt}],
             model="deepseek-vl-chat",
             max_tokens=3000,
             stream=False
         )
 
         response_text = response.choices[0].message.content
-        
-        # Clean the response to get only the JSON part
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if not json_match:
-            print(f"Error: No JSON found in DeepSeek response. Response was: {response_text}")
-            return JSONResponse(status_code=500, content={"error": "Failed to parse prescription from AI response."})
 
-        json_string = json_match.group(0)
-        parsed_json = json.loads(json_string)
+        # Step 4: Extract JSON safely
+        parsed_json = {}
+        try:
+            # Find first {...} block in response
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                parsed_json = json.loads(json_match.group(0))
+            else:
+                # Fallback: try json.loads directly
+                parsed_json = json.loads(response_text)
+        except Exception as json_err:
+            print(f"JSON parsing error: {json_err}. Response text: {response_text}")
+            return JSONResponse(status_code=500, content={"error": "Failed to parse prescription JSON from AI response."})
 
-        # Ensure the response has the expected structure
+        # Step 5: Ensure required keys
         if "medications" not in parsed_json:
-            parsed_json = {"medications": [], "exercises": []}
-        else:
-            # Ensure exercises key exists for frontend compatibility
-            if "exercises" not in parsed_json:
-                parsed_json["exercises"] = []
+            parsed_json["medications"] = []
+        if "exercises" not in parsed_json:
+            parsed_json["exercises"] = []
 
         return JSONResponse(content=parsed_json)
 
