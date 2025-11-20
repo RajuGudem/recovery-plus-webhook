@@ -153,6 +153,7 @@ async def process_prescription(image: UploadFile = File(...)):
         print("DEBUG Parsed Prescription:\n", parsed_text)
         
         medications = []
+        lines = parsed_text.split("\n")
 
         # More realistic medicine pattern
         medicine_line_pattern = re.compile(
