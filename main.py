@@ -127,31 +127,26 @@ async def process_prescription(image: UploadFile = File(...)):
         image_bytes = await image.read()
         processed_image_bytes = await preprocess_image(image_bytes)
 
-        OCR_API_KEY = os.environ.get("OCR_SPACE_API_KEY")
+        OCR_API_KEY = os.environ.get("OCR_VISION_API_KEY")
         if not OCR_API_KEY:
-            return JSONResponse(status_code=500, content={"error": "OCR_SPACE_API_KEY is not set."})
+            return JSONResponse(status_code=500, content={"error": "OCR_VISION_API_KEY is not set."})
 
-        data = {"apikey": OCR_API_KEY, "OCREngine": "3", "isOverlayRequired": False, "detectOrientation": True, "scale": True}
-        files = {"file": ("prescription.png", processed_image_bytes, "image/png")}
+        files = {
+            'file': ('prescription.png', processed_image_bytes, 'image/png'),
+        }
+        data = {
+            'api_key': OCR_API_KEY,
+        }
         
-        ocr_data = None
-        for attempt in range(4):
-            try:
-                ocr_response = requests.post("https://api.ocr.space/parse/image", data=data, files=files, timeout=45)
-                print(f"OCR Response Status: {ocr_response.status_code}, Text: {ocr_response.text[:100]}")
-                if ocr_response.status_code == 200:
-                    ocr_data = ocr_response.json()
-                    if ocr_data.get("ParsedResults"):
-                        break
-                time.sleep(1) # Wait before retrying
-            except requests.exceptions.RequestException as req_e:
-                print(f"OCR attempt {attempt + 1} failed: {req_e}")
-                time.sleep(1)
+        ocr_response = requests.post("https://api.ocr.vision/v1/decode", data=data, files=files, timeout=45)
+        
+        print(f"OCR Response Status: {ocr_response.status_code}, Text: {ocr_response.text[:100]}")
 
-        if not ocr_data or not ocr_data.get("ParsedResults"):
-            return JSONResponse(status_code=400, content={"error": "Could not parse image after multiple attempts."})
+        if ocr_response.status_code != 200:
+            return JSONResponse(status_code=400, content={"error": "Could not parse image with ocr.vision API."})
 
-        parsed_text = ocr_data["ParsedResults"][0]["ParsedText"]
+        ocr_data = ocr_response.json()
+        parsed_text = ocr_data.get("text", "")
         print("DEBUG Parsed Prescription:\n", parsed_text)
         
         medications = []
