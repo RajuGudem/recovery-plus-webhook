@@ -24,6 +24,10 @@ app.add_middleware(
 
 # Configure the Groq API key
 groq_api_key = os.environ.get("GROQ_API_KEY")
+if groq_api_key:
+    print(f"GROQ_API_KEY loaded, starting with: {groq_api_key[:4]}...")
+else:
+    print("GROQ_API_KEY not found!")
 if not groq_api_key:
     raise ValueError("GROQ_API_KEY environment variable not set")
 groq_client = Groq(api_key=groq_api_key)
@@ -53,7 +57,7 @@ def groq_webhook(request: ChatRequest):
 
         response = groq_client.chat.completions.create(
             messages=messages,
-            model="gemma-7b-it", # A common Groq model
+            model="mixtral-8x7b-32768", # A common Groq model
             stream=True
         )
 
