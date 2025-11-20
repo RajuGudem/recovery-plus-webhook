@@ -78,7 +78,9 @@ async def process_prescription(image: UploadFile = File(...)):
         payload = {
             "apikey": OCR_API_KEY,
             "language": "eng",
-            "isOverlayRequired": False
+            "isOverlayRequired": False,
+            "detectOrientation": True,
+            "scale": True
         }
         files = {
             "file": (image.filename, image_bytes, image.content_type)
@@ -90,45 +92,85 @@ async def process_prescription(image: UploadFile = File(...)):
         )
         ocr_data = ocr_response.json()
 
-        try:
-            parsed_text = ocr_data["ParsedResults"][0]["ParsedText"]
-        except Exception:
-            parsed_text = ""
+        if not ocr_data.get("ParsedResults"):
+            return JSONResponse(status_code=400, content={"error": "Could not parse image."})
 
+        parsed_text = ocr_data["ParsedResults"][0]["ParsedText"]
         medications = []
-
+        
+        # Keywords to identify lines with medication info
+        med_keywords = ['mg', 'ml', 'tablet', 'capsule', 'daily', 'twice', 'night', 'morning', 'afternoon', 'noon']
+        
+        # Regex to find medication name, dosage, and frequency on a single line
         med_pattern = re.compile(
-            r"(?P<name>[A-Za-z0-9\-]{2,})\s*(?P<dosage>\d+(?:mg|ml))?\s*(?P<frequency>(?:once|twice|three times|every \d+ hours|[0-2]?\d:[0-5]\d))?",
+            r"^(?P<name>[a-zA-Z0-9\s.-]+?)\s*(?:\((?P<generic_name>[a-zA-Z\s]+)\))?\s*(?P<dosage>\d+\s*(?:mg|ml|g))?",
             re.IGNORECASE
         )
+        
+        # Regex for 1-0-1 style frequency
+        freq_pattern = re.compile(r'(\d)\s*-\s*(\d)\s*-\s*(\d)')
 
-        for match in med_pattern.finditer(parsed_text):
-            med_name = match.group("name")
-            dosage = match.group("dosage") or ""
-            frequency = match.group("frequency") or ""
-
-            if not med_name or len(med_name) < 2:
+        lines = parsed_text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not any(keyword in line.lower() for keyword in med_keywords):
                 continue
 
+            match = med_pattern.match(line)
+            if not match:
+                continue
+
+            med_name = match.group("name").strip()
+            if len(med_name) < 3: # Filter out very short, likely incorrect matches
+                continue
+
+            dosage = match.group("dosage") or ""
             times = []
-            freq_lower = frequency.lower()
-            if "once" in freq_lower:
-                times = ["08:00"]
-            elif "twice" in freq_lower:
-                times = ["08:00", "20:00"]
-            elif "three" in freq_lower:
-                times = ["08:00", "14:00", "20:00"]
-            elif re.match(r"\d{1,2}:\d{2}", frequency):
-                times = [frequency]
 
-            medications.append({
-                "name": med_name,
-                "dosage": dosage,
-                "times": times
-            })
+            # Check for 1-0-1 format
+            freq_match = freq_pattern.search(line)
+            if freq_match:
+                morning, noon, night = [int(i) > 0 for i in freq_match.groups()]
+                if morning:
+                    times.append("Morning")
+                if noon:
+                    times.append("Noon")
+                if night:
+                    times.append("Night")
+            else:
+                # Check for keyword frequencies
+                line_lower = line.lower()
+                if "once" in line_lower or "daily" in line_lower:
+                    times = ["Morning"]
+                elif "twice" in line_lower:
+                    times = ["Morning", "Night"]
+                elif "three times" in line_lower:
+                    times = ["Morning", "Noon", "Night"]
+                
+                if not times: # If no frequency words found, check for time of day
+                    if "morning" in line_lower:
+                        times.append("Morning")
+                    if "noon" in line_lower or "afternoon" in line_lower:
+                        times.append("Noon")
+                    if "night" in line_lower or "evening" in line_lower:
+                        times.append("Night")
 
-        return JSONResponse(content={"medications": medications})
+            # Avoid adding duplicates
+            is_duplicate = False
+            for med in medications:
+                if med['name'].lower() == med_name.lower():
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                medications.append({
+                    "name": med_name,
+                    "dosage": dosage.strip(),
+                    "timings": times if times else ["As directed"]
+                })
+
+        return JSONResponse(content={"medications": medications, "exercises": []}) # exercises are not handled here
 
     except Exception as e:
-        print("Error in /process_prescription:", e)
+        print(f"Error in /process_prescription: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
